@@ -55,16 +55,23 @@ const config = {
         }
       }
 
-      const refName = exec(
-        "git describe --tags --abbrev=0 --match 'v*' --exclude '*rc*'",
-      ).toString();
-      const version = semver.parse(refName, {}, true);
-      return `${version.major}.${version.minor}.${version.patch}`;
+      try {
+        const refName = exec(
+          "git describe --tags --abbrev=0 --match 'v*' --exclude '*rc*'",
+        ).toString();
+        const version = semver.parse(refName, {}, true);
+        return `${version.major}.${version.minor}.${version.patch}`;
+      } catch (error) {
+        console.warn("Failed to get version from Git, using default '0.0.0'");
+        return "0.0.0";
+      }
     })(),
   },
 
   url: "https://opendal.apache.org/",
   baseUrl: "/",
+  // Always set trailingSlash to true to avoid redirecting to a URL with a trailing slash
+  trailingSlash: true,
 
   onBrokenLinks: "throw",
   onBrokenMarkdownLinks: "throw",
