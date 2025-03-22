@@ -136,10 +136,19 @@ impl OneDriveCore {
         self.info.http_client().send(request).await
     }
 
+    /// Download a file
+    ///
+    /// OneDrive handles a download in 2 steps:
+    /// 1. Returns a 302 with a presigned URL. If `If-None-Match` succeed, returns 304.
+    /// 2. With the presigned URL, we can send a GET:
+    ///   1. When getting an item succeed with a `Range` header, we get a 206 Partial Content response.
+    ///   2. When succeed, we get a 200 response.
+    ///
+    /// Read more at https://learn.microsoft.com/en-us/graph/api/driveitem-get-content
     pub(crate) async fn onedrive_get_content(
         &self,
         path: &str,
-        range: BytesRange,
+        args: &OpRead,
     ) -> Result<Response<HttpBody>> {
         let path = build_rooted_abs_path(&self.root, path);
         let url: String = format!(
@@ -148,7 +157,10 @@ impl OneDriveCore {
             percent_encode_path(&path),
         );
 
-        let request = Request::get(&url).header(header::RANGE, range.to_header());
+        let mut request = Request::get(&url).header(header::RANGE, args.range().to_header());
+        if let Some(etag) = args.if_none_match() {
+            request = request.header(header::IF_NONE_MATCH, etag);
+        }
 
         let mut request = request
             .body(Buffer::new())
@@ -210,9 +222,7 @@ impl OneDriveCore {
             request = request.header(header::CONTENT_TYPE, mime)
         }
 
-        let mut request = request.body(body).map_err(new_request_build_error)?;
-
-        self.sign(&mut request).await?;
+        let request = request.body(body).map_err(new_request_build_error)?;
 
         self.info.http_client().send(request).await
     }
@@ -321,7 +331,7 @@ impl OneDriveSigner {
     async fn refresh_tokens(&mut self) -> Result<()> {
         // OneDrive users must provide at least this required permission scope
         let encoded_payload = format!(
-            "client_id={}&client_secret={}&scope=Files.ReadWrite&refresh_token={}&grant_type=refresh_token",
+            "client_id={}&client_secret={}&scope=offline_access%20Files.ReadWrite&refresh_token={}&grant_type=refresh_token",
             percent_encode_path(self.client_id.as_str()),
             percent_encode_path(self.client_secret.as_str()),
             percent_encode_path(self.refresh_token.as_str())
