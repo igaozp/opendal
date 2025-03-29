@@ -35,7 +35,6 @@ use http::header::IF_NONE_MATCH;
 use http::header::IF_UNMODIFIED_SINCE;
 use http::Request;
 use http::Response;
-use once_cell::sync::Lazy;
 use reqsign::GoogleCredential;
 use reqsign::GoogleCredentialLoader;
 use reqsign::GoogleSigner;
@@ -43,6 +42,7 @@ use reqsign::GoogleToken;
 use reqsign::GoogleTokenLoader;
 use serde::Deserialize;
 use serde::Serialize;
+use std::sync::LazyLock;
 
 use super::uri::percent_encode_path;
 use crate::raw::*;
@@ -61,7 +61,6 @@ pub struct GcsCore {
     pub bucket: String,
     pub root: String,
 
-    pub client: HttpClient,
     pub signer: GoogleSigner,
     pub token_loader: GoogleTokenLoader,
     pub token: Option<String>,
@@ -84,8 +83,8 @@ impl Debug for GcsCore {
     }
 }
 
-static BACKOFF: Lazy<ExponentialBuilder> =
-    Lazy::new(|| ExponentialBuilder::default().with_jitter());
+static BACKOFF: LazyLock<ExponentialBuilder> =
+    LazyLock::new(|| ExponentialBuilder::default().with_jitter());
 
 impl GcsCore {
     async fn load_token(&self) -> Result<Option<GoogleToken>> {
@@ -174,7 +173,7 @@ impl GcsCore {
 
     #[inline]
     pub async fn send(&self, req: Request<Buffer>) -> Result<Response<Buffer>> {
-        self.client.send(req).await
+        self.info.http_client().send(req).await
     }
 }
 
@@ -254,7 +253,7 @@ impl GcsCore {
         let mut req = self.gcs_get_object_request(path, range, args)?;
 
         self.sign(&mut req).await?;
-        self.client.fetch(req).await
+        self.info.http_client().fetch(req).await
     }
 
     pub fn gcs_insert_object_request(

@@ -222,7 +222,7 @@ impl<A: Access> LayeredAccess for CorrectnessAccessor<A> {
         if !capability.read_with_version && args.version().is_some() {
             return Err(new_unsupported_error(
                 self.info.as_ref(),
-                Operation::BlockingRead,
+                Operation::Read,
                 "version",
             ));
         }
@@ -235,21 +235,21 @@ impl<A: Access> LayeredAccess for CorrectnessAccessor<A> {
         if args.append() && !capability.write_can_append {
             return Err(new_unsupported_error(
                 &self.info,
-                Operation::BlockingWrite,
+                Operation::Write,
                 "append",
             ));
         }
         if args.if_not_exists() && !capability.write_with_if_not_exists {
             return Err(new_unsupported_error(
                 &self.info,
-                Operation::BlockingWrite,
+                Operation::Write,
                 "if_not_exists",
             ));
         }
         if args.if_none_match().is_some() && !capability.write_with_if_none_match {
             return Err(new_unsupported_error(
                 self.info.as_ref(),
-                Operation::BlockingWrite,
+                Operation::Write,
                 "if_none_match",
             ));
         }
@@ -262,7 +262,7 @@ impl<A: Access> LayeredAccess for CorrectnessAccessor<A> {
         if !capability.stat_with_version && args.version().is_some() {
             return Err(new_unsupported_error(
                 self.info.as_ref(),
-                Operation::BlockingStat,
+                Operation::Stat,
                 "version",
             ));
         }
@@ -296,7 +296,7 @@ impl<T> CheckWrapper<T> {
         if args.version().is_some() && !self.info.full_capability().delete_with_version {
             return Err(new_unsupported_error(
                 &self.info,
-                Operation::DeleterDelete,
+                Operation::Delete,
                 "version",
             ));
         }

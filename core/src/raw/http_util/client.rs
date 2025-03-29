@@ -27,8 +27,8 @@ use futures::Future;
 use futures::TryStreamExt;
 use http::Request;
 use http::Response;
-use once_cell::sync::Lazy;
 use raw::oio::Read;
+use std::sync::LazyLock;
 
 use super::parse_content_encoding;
 use super::parse_content_length;
@@ -40,12 +40,17 @@ use crate::*;
 /// This is merely a temporary solution because reqsign requires a reqwest client to be passed.
 /// We will remove it after the next major version of reqsign, which will enable users to provide their own client.
 #[allow(dead_code)]
-pub(crate) static GLOBAL_REQWEST_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+pub(crate) static GLOBAL_REQWEST_CLIENT: LazyLock<reqwest::Client> =
+    LazyLock::new(reqwest::Client::new);
 
 /// HttpFetcher is a type erased [`HttpFetch`].
 pub type HttpFetcher = Arc<dyn HttpFetchDyn>;
 
-/// HttpClient that used across opendal.
+/// A HTTP client instance for OpenDAL's services.
+///
+/// # Notes
+///
+/// * A http client must support redirections that follows 3xx response.
 #[derive(Clone)]
 pub struct HttpClient {
     fetcher: HttpFetcher,
@@ -78,6 +83,11 @@ impl HttpClient {
         Self { fetcher }
     }
 
+    /// Get the inner http client.
+    pub(crate) fn into_inner(self) -> HttpFetcher {
+        self.fetcher
+    }
+
     /// Build a new http client in async context.
     #[deprecated]
     pub fn build(builder: reqwest::ClientBuilder) -> Result<Self> {
@@ -88,14 +98,16 @@ impl HttpClient {
         Ok(Self { fetcher })
     }
 
-    /// Send a request in async way.
+    /// Send a request and consume response.
     pub async fn send(&self, req: Request<Buffer>) -> Result<Response<Buffer>> {
         let (parts, mut body) = self.fetch(req).await?.into_parts();
         let buffer = body.read_all().await?;
         Ok(Response::from_parts(parts, buffer))
     }
 
-    /// Fetch a request in async way.
+    /// Fetch a request and return a streamable [`HttpBody`].
+    ///
+    /// Services can use [`HttpBody`] as [`Access::Read`].
     pub async fn fetch(&self, req: Request<Buffer>) -> Result<Response<HttpBody>> {
         self.fetcher.fetch(req).await
     }
