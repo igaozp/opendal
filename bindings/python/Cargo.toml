@@ -24,8 +24,8 @@ edition = "2021"
 homepage = "https://opendal.apache.org/"
 license = "Apache-2.0"
 repository = "https://github.com/apache/opendal"
-rust-version = "1.75"
-version = "0.45.16"
+rust-version = "1.80"
+version = "0.45.17"
 
 [features]
 default = [
@@ -63,6 +63,7 @@ services-all = [
   "services-gdrive",
   # FIXME how to support HDFS services in bindings?
   # "services-hdfs",
+  # "services-hdfs-native",
   "services-huggingface",
   "services-ipfs",
   "services-memcached",
@@ -122,6 +123,7 @@ services-ftp = ["opendal/services-ftp"]
 services-gdrive = ["opendal/services-gdrive"]
 services-gridfs = ["opendal/services-gridfs"]
 services-hdfs = ["opendal/services-hdfs"]
+services-hdfs-native = ["opendal/services-hdfs-native"]
 services-huggingface = ["opendal/services-huggingface"]
 services-ipfs = ["opendal/services-ipfs"]
 services-koofr = ["opendal/services-koofr"]
@@ -155,14 +157,15 @@ doc = false
 
 [dependencies]
 bytes = "1.5.0"
+chrono = "0.4"
 dict_derive = "0.6.0"
 futures = "0.3.28"
 # this crate won't be published, we always use the local version
 opendal = { version = ">=0", path = "../../core", features = [
   "layers-blocking",
 ] }
-pyo3 = { version = "0.23.3", features = ["generate-import-lib"] }
-pyo3-async-runtimes = { version = "0.23.0", features = ["tokio-runtime"] }
+pyo3 = { version = "0.24.1", features = ["generate-import-lib", "chrono"] }
+pyo3-async-runtimes = { version = "0.24.0", features = ["tokio-runtime"] }
 tokio = "1"
 
 [target.'cfg(unix)'.dependencies.opendal]

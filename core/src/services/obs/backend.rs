@@ -131,6 +131,13 @@ impl ObsBuilder {
         self
     }
 
+    /// Set bucket versioning status for this backend
+    pub fn enable_versioning(mut self, enabled: bool) -> Self {
+        self.config.enable_versioning = enabled;
+
+        self
+    }
+
     /// Specify the http client that used by this service.
     ///
     /// # Notes
@@ -350,6 +357,10 @@ impl Access for ObsBackend {
                     meta.with_user_metadata(user_meta);
                 }
 
+                if let Some(v) = parse_header_to_str(headers, constants::X_OBS_VERSION_ID)? {
+                    meta.set_version(v);
+                }
+
                 Ok(RpStat::new(meta))
             }
             StatusCode::NOT_FOUND if path.ends_with('/') => {
@@ -383,8 +394,8 @@ impl Access for ObsBackend {
             ObsWriters::Two(oio::AppendWriter::new(writer))
         } else {
             ObsWriters::One(oio::MultipartWriter::new(
+                self.core.info.clone(),
                 writer,
-                args.executor().cloned(),
                 args.concurrent(),
             ))
         };

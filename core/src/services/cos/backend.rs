@@ -342,8 +342,10 @@ impl Access for CosBackend {
                     meta.with_user_metadata(user_meta);
                 }
 
-                if let Some(v) = parse_header_to_str(headers, "x-cos-version-id")? {
-                    meta.set_version(v);
+                if let Some(v) = parse_header_to_str(headers, constants::X_COS_VERSION_ID)? {
+                    if v != "null" {
+                        meta.set_version(v);
+                    }
                 }
 
                 Ok(RpStat::new(meta))
@@ -376,8 +378,8 @@ impl Access for CosBackend {
             CosWriters::Two(oio::AppendWriter::new(writer))
         } else {
             CosWriters::One(oio::MultipartWriter::new(
+                self.core.info.clone(),
                 writer,
-                args.executor().cloned(),
                 args.concurrent(),
             ))
         };

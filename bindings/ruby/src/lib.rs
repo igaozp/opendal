@@ -28,6 +28,7 @@ mod capability;
 mod io;
 mod lister;
 mod metadata;
+mod middlewares;
 mod operator;
 mod operator_info;
 
@@ -43,8 +44,9 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let _ = metadata::include(&gem_module);
     let _ = capability::include(&gem_module);
     let _ = io::include(&gem_module);
-    let _ = lister::include(&ruby, &gem_module);
+    let _ = lister::include(ruby, &gem_module);
     let _ = operator_info::include(&gem_module);
+    let _ = middlewares::include(&gem_module);
 
     Ok(())
 }
