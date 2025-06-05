@@ -37,15 +37,21 @@ use crate::raw::*;
 use crate::services::AzdlsConfig;
 use crate::*;
 
-/// Known endpoint suffix Azure Data Lake Storage Gen2 URI syntax.
-/// Azure public cloud: https://accountname.dfs.core.windows.net
-/// Azure US Government: https://accountname.dfs.core.usgovcloudapi.net
-/// Azure China: https://accountname.dfs.core.chinacloudapi.cn
-const KNOWN_AZDLS_ENDPOINT_SUFFIX: &[&str] = &[
-    "dfs.core.windows.net",
-    "dfs.core.usgovcloudapi.net",
-    "dfs.core.chinacloudapi.cn",
-];
+impl From<AzureStorageConfig> for AzdlsConfig {
+    fn from(config: AzureStorageConfig) -> Self {
+        AzdlsConfig {
+            endpoint: config.endpoint,
+            account_name: config.account_name,
+            account_key: config.account_key,
+            client_secret: config.client_secret,
+            tenant_id: config.tenant_id,
+            client_id: config.client_id,
+            sas_token: config.sas_token,
+            authority_host: config.authority_host,
+            ..Default::default()
+        }
+    }
+}
 
 impl Configurator for AzdlsConfig {
     type Builder = AzdlsBuilder;
@@ -139,6 +145,67 @@ impl AzdlsBuilder {
         self
     }
 
+    /// Set client_secret of this backend.
+    ///
+    /// - If client_secret is set, we will take user's input first.
+    /// - If not, we will try to load it from environment.
+    /// - required for client_credentials authentication
+    pub fn client_secret(mut self, client_secret: &str) -> Self {
+        if !client_secret.is_empty() {
+            self.config.client_secret = Some(client_secret.to_string());
+        }
+
+        self
+    }
+
+    /// Set tenant_id of this backend.
+    ///
+    /// - If tenant_id is set, we will take user's input first.
+    /// - If not, we will try to load it from environment.
+    /// - required for client_credentials authentication
+    pub fn tenant_id(mut self, tenant_id: &str) -> Self {
+        if !tenant_id.is_empty() {
+            self.config.tenant_id = Some(tenant_id.to_string());
+        }
+
+        self
+    }
+
+    /// Set client_id of this backend.
+    ///
+    /// - If client_id is set, we will take user's input first.
+    /// - If not, we will try to load it from environment.
+    /// - required for client_credentials authentication
+    pub fn client_id(mut self, client_id: &str) -> Self {
+        if !client_id.is_empty() {
+            self.config.client_id = Some(client_id.to_string());
+        }
+
+        self
+    }
+
+    /// Set the sas_token of this backend.
+    pub fn sas_token(mut self, sas_token: &str) -> Self {
+        if !sas_token.is_empty() {
+            self.config.sas_token = Some(sas_token.to_string());
+        }
+
+        self
+    }
+
+    /// Set authority_host of this backend.
+    ///
+    /// - If authority_host is set, we will take user's input first.
+    /// - If not, we will try to load it from environment.
+    /// - default value: `https://login.microsoftonline.com`
+    pub fn authority_host(mut self, authority_host: &str) -> Self {
+        if !authority_host.is_empty() {
+            self.config.authority_host = Some(authority_host.to_string());
+        }
+
+        self
+    }
+
     /// Specify the http client that used by this service.
     ///
     /// # Notes
@@ -150,6 +217,34 @@ impl AzdlsBuilder {
     pub fn http_client(mut self, client: HttpClient) -> Self {
         self.http_client = Some(client);
         self
+    }
+
+    /// Create a new `AzdlsBuilder` instance from an [Azure Storage connection string][1].
+    ///
+    /// [1]: https://learn.microsoft.com/en-us/azure/storage/common/storage-configure-connection-string
+    ///
+    /// # Example
+    /// ```
+    /// use opendal::Builder;
+    /// use opendal::services::Azdls;
+    ///
+    /// let conn_str = "AccountName=example;DefaultEndpointsProtocol=https;EndpointSuffix=core.windows.net";
+    ///
+    /// let mut config = Azdls::from_connection_string(&conn_str)
+    ///     .unwrap()
+    ///     // Add additional configuration if needed
+    ///     .filesystem("myFilesystem")
+    ///     .client_id("myClientId")
+    ///     .client_secret("myClientSecret")
+    ///     .tenant_id("myTenantId")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn from_connection_string(conn_str: &str) -> Result<Self> {
+        let config =
+            raw::azure_config_from_connection_string(conn_str, raw::AzureStorageService::Adls)?;
+
+        Ok(AzdlsConfig::from(config).into_builder())
     }
 }
 
@@ -173,7 +268,7 @@ impl Builder for AzdlsBuilder {
         debug!("backend use filesystem {}", &filesystem);
 
         let endpoint = match &self.config.endpoint {
-            Some(endpoint) => Ok(endpoint.clone()),
+            Some(endpoint) => Ok(endpoint.clone().trim_end_matches('/').to_string()),
             None => Err(Error::new(ErrorKind::ConfigInvalid, "endpoint is empty")
                 .with_operation("Builder::build")
                 .with_context("service", Scheme::Azdls)),
@@ -185,9 +280,13 @@ impl Builder for AzdlsBuilder {
                 .config
                 .account_name
                 .clone()
-                .or_else(|| infer_storage_name_from_endpoint(endpoint.as_str())),
+                .or_else(|| raw::azure_account_name_from_endpoint(endpoint.as_str())),
             account_key: self.config.account_key.clone(),
-            sas_token: None,
+            sas_token: self.config.sas_token,
+            client_id: self.config.client_id.clone(),
+            client_secret: self.config.client_secret.clone(),
+            tenant_id: self.config.tenant_id.clone(),
+            authority_host: self.config.authority_host.clone(),
             ..Default::default()
         };
 
@@ -262,10 +361,6 @@ impl Access for AzdlsBackend {
     type Writer = AzdlsWriters;
     type Lister = oio::PageLister<AzdlsLister>;
     type Deleter = oio::OneShotDeleter<AzdlsDeleter>;
-    type BlockingReader = ();
-    type BlockingWriter = ();
-    type BlockingLister = ();
-    type BlockingDeleter = ();
 
     fn info(&self) -> Arc<AccessorInfo> {
         self.core.info.clone()
@@ -349,45 +444,5 @@ impl Access for AzdlsBackend {
             StatusCode::CREATED => Ok(RpRename::default()),
             _ => Err(parse_error(resp)),
         }
-    }
-}
-
-fn infer_storage_name_from_endpoint(endpoint: &str) -> Option<String> {
-    let endpoint: &str = endpoint
-        .strip_prefix("http://")
-        .or_else(|| endpoint.strip_prefix("https://"))
-        .unwrap_or(endpoint);
-
-    let mut parts = endpoint.splitn(2, '.');
-    let storage_name = parts.next();
-    let endpoint_suffix = parts
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches('/')
-        .to_lowercase();
-
-    if KNOWN_AZDLS_ENDPOINT_SUFFIX.contains(&endpoint_suffix.as_str()) {
-        storage_name.map(|s| s.to_string())
-    } else {
-        None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::infer_storage_name_from_endpoint;
-
-    #[test]
-    fn test_infer_storage_name_from_endpoint() {
-        let endpoint = "https://account.dfs.core.windows.net";
-        let storage_name = infer_storage_name_from_endpoint(endpoint);
-        assert_eq!(storage_name, Some("account".to_string()));
-    }
-
-    #[test]
-    fn test_infer_storage_name_from_endpoint_with_trailing_slash() {
-        let endpoint = "https://account.dfs.core.windows.net/";
-        let storage_name = infer_storage_name_from_endpoint(endpoint);
-        assert_eq!(storage_name, Some("account".to_string()));
     }
 }
