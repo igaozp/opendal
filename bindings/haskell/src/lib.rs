@@ -21,18 +21,28 @@ mod types;
 
 use std::collections::HashMap;
 use std::ffi::CStr;
+use std::ffi::CString;
 use std::mem;
 use std::os::raw::c_char;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use ::opendal as od;
 use logger::HsLogger;
 use od::layers::LoggingLayer;
 use od::layers::RetryLayer;
-use od::BlockingLister;
+use od::options;
+use opendal::blocking;
 use result::FFIResult;
 use types::ByteSlice;
 use types::Metadata;
+
+static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+});
 
 /// # Safety
 ///
@@ -55,7 +65,7 @@ pub unsafe extern "C" fn via_map_ffi(
     values: *const *const c_char,
     len: usize,
     callback: Option<extern "C" fn(u32, *const c_char)>,
-    result: *mut FFIResult<od::BlockingOperator>,
+    result: *mut FFIResult<od::blocking::Operator>,
 ) {
     let scheme_str = match CStr::from_ptr(scheme).to_str() {
         Ok(s) => s,
@@ -106,7 +116,10 @@ pub unsafe extern "C" fn via_map_ffi(
                 operator = operator.layer(LoggingLayer::default());
             }
 
-            FFIResult::ok(operator.blocking())
+            let handle = RUNTIME.handle();
+            let _enter = handle.enter();
+            let op = od::blocking::Operator::new(operator).unwrap();
+            FFIResult::ok(op)
         }
         Err(e) => FFIResult::err_with_source("Failed to create Operator", e),
     };
@@ -116,13 +129,13 @@ pub unsafe extern "C" fn via_map_ffi(
 
 /// # Safety
 ///
-/// * `operator` is a valid pointer to a `BlockingOperator`.
+/// * `operator` is a valid pointer to a `blocking::Operator`.
 ///
 /// # Panics
 ///
 /// * If `operator` is not a valid pointer.
 #[no_mangle]
-pub unsafe extern "C" fn free_operator(operator: *mut od::BlockingOperator) {
+pub unsafe extern "C" fn free_operator(operator: *mut od::blocking::Operator) {
     if !operator.is_null() {
         drop(Box::from_raw(operator));
     }
@@ -130,7 +143,7 @@ pub unsafe extern "C" fn free_operator(operator: *mut od::BlockingOperator) {
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path` is a valid pointer to a nul terminated string.
 /// * `result` is a valid pointer, and has available memory to write to
 ///
@@ -140,7 +153,7 @@ pub unsafe extern "C" fn free_operator(operator: *mut od::BlockingOperator) {
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_read(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path: *const c_char,
     result: *mut FFIResult<ByteSlice>,
 ) {
@@ -169,7 +182,7 @@ pub unsafe extern "C" fn blocking_read(
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path` is a valid pointer to a nul terminated string.
 /// * `bytes` is a valid pointer to a byte array.
 /// * `len` is the length of `bytes`.
@@ -182,7 +195,7 @@ pub unsafe extern "C" fn blocking_read(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_write(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path: *const c_char,
     bytes: *const c_char,
     len: usize,
@@ -218,7 +231,7 @@ pub unsafe extern "C" fn blocking_write(
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path` is a valid pointer to a nul terminated string.
 /// * `result` is a valid pointer, and has available memory to write to
 ///
@@ -228,7 +241,7 @@ pub unsafe extern "C" fn blocking_write(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_is_exist(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path: *const c_char,
     result: *mut FFIResult<bool>,
 ) {
@@ -257,7 +270,7 @@ pub unsafe extern "C" fn blocking_is_exist(
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path` is a valid pointer to a nul terminated string.
 /// * `result` is a valid pointer, and has available memory to write to
 ///
@@ -267,7 +280,7 @@ pub unsafe extern "C" fn blocking_is_exist(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_create_dir(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path: *const c_char,
     result: *mut FFIResult<()>,
 ) {
@@ -296,7 +309,7 @@ pub unsafe extern "C" fn blocking_create_dir(
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path_from` is a valid pointer to a nul terminated string.
 /// * `path_to` is a valid pointer to a nul terminated string.
 /// * `result` is a valid pointer, and has available memory to write to
@@ -307,7 +320,7 @@ pub unsafe extern "C" fn blocking_create_dir(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_copy(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path_from: *const c_char,
     path_to: *const c_char,
     result: *mut FFIResult<()>,
@@ -345,7 +358,7 @@ pub unsafe extern "C" fn blocking_copy(
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path_from` is a valid pointer to a nul terminated string.
 /// * `path_to` is a valid pointer to a nul terminated string.
 /// * `result` is a valid pointer, and has available memory to write to
@@ -356,7 +369,7 @@ pub unsafe extern "C" fn blocking_copy(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_rename(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path_from: *const c_char,
     path_to: *const c_char,
     result: *mut FFIResult<()>,
@@ -394,7 +407,7 @@ pub unsafe extern "C" fn blocking_rename(
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path` is a valid pointer to a nul terminated string.
 /// * `result` is a valid pointer, and has available memory to write to
 ///
@@ -404,7 +417,7 @@ pub unsafe extern "C" fn blocking_rename(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_delete(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path: *const c_char,
     result: *mut FFIResult<()>,
 ) {
@@ -433,7 +446,7 @@ pub unsafe extern "C" fn blocking_delete(
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path` is a valid pointer to a nul terminated string.
 /// * `result` is a valid pointer, and has available memory to write to
 ///
@@ -443,7 +456,7 @@ pub unsafe extern "C" fn blocking_delete(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_stat(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path: *const c_char,
     result: *mut FFIResult<Metadata>,
 ) {
@@ -472,7 +485,7 @@ pub unsafe extern "C" fn blocking_stat(
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path` is a valid pointer to a nul terminated string.
 /// * `result` is a valid pointer, and has available memory to write to
 ///
@@ -482,9 +495,9 @@ pub unsafe extern "C" fn blocking_stat(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_list(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path: *const c_char,
-    result: *mut FFIResult<*mut BlockingLister>,
+    result: *mut FFIResult<*mut blocking::Lister>,
 ) {
     let op = if op.is_null() {
         *result = FFIResult::err("Operator is null");
@@ -511,7 +524,7 @@ pub unsafe extern "C" fn blocking_list(
 
 /// # Safety
 ///
-/// * `op` is a valid pointer to a `BlockingOperator`.
+/// * `op` is a valid pointer to a `blocking::Operator`.
 /// * `path` is a valid pointer to a nul terminated string.
 /// * `result` is a valid pointer, and has available memory to write to
 ///
@@ -521,9 +534,9 @@ pub unsafe extern "C" fn blocking_list(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn blocking_scan(
-    op: *mut od::BlockingOperator,
+    op: *mut od::blocking::Operator,
     path: *const c_char,
-    result: *mut FFIResult<*mut BlockingLister>,
+    result: *mut FFIResult<*mut blocking::Lister>,
 ) {
     let op = if op.is_null() {
         *result = FFIResult::err("Operator is null");
@@ -540,7 +553,13 @@ pub unsafe extern "C" fn blocking_scan(
         }
     };
 
-    let res = match op.lister_with(path_str).recursive(true).call() {
+    let res = match op.lister_options(
+        path_str,
+        options::ListOptions {
+            recursive: true,
+            ..Default::default()
+        },
+    ) {
         Ok(lister) => FFIResult::ok(Box::into_raw(Box::new(lister))),
         Err(e) => FFIResult::err_with_source("Failed to scan", e),
     };
@@ -559,7 +578,7 @@ pub unsafe extern "C" fn blocking_scan(
 /// * If `result` is not a valid pointer, or does not have available memory to write to.
 #[no_mangle]
 pub unsafe extern "C" fn lister_next(
-    lister: *mut BlockingLister,
+    lister: *mut blocking::Lister,
     result: *mut FFIResult<*const c_char>,
 ) {
     let lister = if lister.is_null() {
@@ -589,8 +608,262 @@ pub unsafe extern "C" fn lister_next(
 ///
 /// * If `lister` is not a valid pointer.
 #[no_mangle]
-pub unsafe extern "C" fn free_lister(lister: *mut BlockingLister) {
+pub unsafe extern "C" fn free_lister(lister: *mut blocking::Lister) {
     if !lister.is_null() {
         drop(Box::from_raw(lister));
+    }
+}
+
+/// Get operator info (scheme)
+///
+/// # Safety
+///
+/// * `op` is a valid pointer to a `blocking::Operator`.
+/// * `result` is a valid pointer, and has available memory to write to
+///
+/// # Panics
+///
+/// * If `op` is not a valid pointer.
+/// * If `result` is not a valid pointer, or does not have available memory to write to.
+#[no_mangle]
+pub unsafe extern "C" fn operator_info(
+    op: *mut od::blocking::Operator,
+    result: *mut FFIResult<*const c_char>,
+) {
+    let op = if op.is_null() {
+        *result = FFIResult::err("Operator is null");
+        return;
+    } else {
+        &mut *op
+    };
+
+    let info = op.info();
+    let scheme_str = info.scheme().to_string();
+
+    let res = match CString::new(scheme_str) {
+        Ok(c_string) => {
+            let ptr = c_string.into_raw() as *const c_char;
+            FFIResult::ok(ptr)
+        }
+        Err(_) => FFIResult::err("Failed to convert scheme to C string"),
+    };
+
+    *result = res;
+}
+
+/// Remove all files and directories recursively
+///
+/// # Safety
+///
+/// * `op` is a valid pointer to a `blocking::Operator`.
+/// * `path` is a valid pointer to a nul terminated string.
+/// * `result` is a valid pointer, and has available memory to write to
+///
+/// # Panics
+///
+/// * If `op` is not a valid pointer.
+/// * If `result` is not a valid pointer, or does not have available memory to write to.
+#[no_mangle]
+pub unsafe extern "C" fn blocking_remove_all(
+    op: *mut od::blocking::Operator,
+    path: *const c_char,
+    result: *mut FFIResult<()>,
+) {
+    let op = if op.is_null() {
+        *result = FFIResult::err("Operator is null");
+        return;
+    } else {
+        &mut *op
+    };
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *result = FFIResult::err("Failed to convert path to string");
+            return;
+        }
+    };
+
+    let res = match op.remove_all(path_str) {
+        Ok(()) => FFIResult::ok(()),
+        Err(e) => FFIResult::err_with_source("Failed to remove all", e),
+    };
+
+    *result = res;
+}
+
+/// Creates a blocking writer for the given path
+///
+/// # Safety
+///
+/// * `op` is a valid pointer to a `blocking::Operator`.
+/// * `path` is a valid pointer to a nul terminated string.
+/// * `result` is a valid pointer, and has available memory to write to
+///
+/// # Panics
+///
+/// * If `op` is not a valid pointer.
+/// * If `result` is not a valid pointer, or does not have available memory to write to.
+#[no_mangle]
+pub unsafe extern "C" fn blocking_writer(
+    op: *mut od::blocking::Operator,
+    path: *const c_char,
+    result: *mut FFIResult<*mut blocking::Writer>,
+) {
+    let op = if op.is_null() {
+        *result = FFIResult::err("Operator is null");
+        return;
+    } else {
+        &mut *op
+    };
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *result = FFIResult::err("Failed to convert path to string");
+            return;
+        }
+    };
+
+    let res = match op.writer(path_str) {
+        Ok(writer) => FFIResult::ok(Box::into_raw(Box::new(writer))),
+        Err(e) => FFIResult::err_with_source("Failed to create writer", e),
+    };
+
+    *result = res;
+}
+
+/// Creates a blocking writer for the given path with append mode
+///
+/// # Safety
+///
+/// * `op` is a valid pointer to a `blocking::Operator`.
+/// * `path` is a valid pointer to a nul terminated string.
+/// * `result` is a valid pointer, and has available memory to write to
+///
+/// # Panics
+///
+/// * If `op` is not a valid pointer.
+/// * If `result` is not a valid pointer, or does not have available memory to write to.
+#[no_mangle]
+pub unsafe extern "C" fn blocking_writer_append(
+    op: *mut od::blocking::Operator,
+    path: *const c_char,
+    result: *mut FFIResult<*mut blocking::Writer>,
+) {
+    let op = if op.is_null() {
+        *result = FFIResult::err("Operator is null");
+        return;
+    } else {
+        &mut *op
+    };
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *result = FFIResult::err("Failed to convert path to string");
+            return;
+        }
+    };
+
+    // Create writer with append option
+    let opts = od::options::WriteOptions {
+        append: true,
+        ..Default::default()
+    };
+
+    let res = match op.writer_options(path_str, opts) {
+        Ok(writer) => FFIResult::ok(Box::into_raw(Box::new(writer))),
+        Err(e) => FFIResult::err_with_source("Failed to create append writer", e),
+    };
+
+    *result = res;
+}
+
+/// Write data using a blocking writer
+///
+/// # Safety
+///
+/// * `writer` is a valid pointer to a `blocking::Writer`.
+/// * `bytes` is a valid pointer to a byte array.
+/// * `len` is the length of `bytes`.
+/// * `result` is a valid pointer, and has available memory to write to
+///
+/// # Panics
+///
+/// * If `writer` is not a valid pointer.
+/// * If `bytes` is not a valid pointer, or `len` is more than the length of `bytes`.
+/// * If `result` is not a valid pointer, or does not have available memory to write to.
+#[no_mangle]
+pub unsafe extern "C" fn writer_write(
+    writer: *mut blocking::Writer,
+    bytes: *const c_char,
+    len: usize,
+    result: *mut FFIResult<()>,
+) {
+    let writer = if writer.is_null() {
+        *result = FFIResult::err("Writer is null");
+        return;
+    } else {
+        &mut *writer
+    };
+
+    let bytes = Vec::from_raw_parts(bytes as *mut u8, len, len);
+
+    let res = match writer.write(bytes.clone()) {
+        Ok(_) => FFIResult::ok(()),
+        Err(e) => FFIResult::err_with_source("Failed to write with writer", e),
+    };
+
+    *result = res;
+
+    // bytes memory is controlled by Haskell, we can't drop it here
+    mem::forget(bytes);
+}
+
+/// Close a blocking writer
+///
+/// # Safety
+///
+/// * `writer` is a valid pointer to a `blocking::Writer`.
+/// * `result` is a valid pointer, and has available memory to write to
+///
+/// # Panics
+///
+/// * If `writer` is not a valid pointer.
+/// * If `result` is not a valid pointer, or does not have available memory to write to.
+#[no_mangle]
+pub unsafe extern "C" fn writer_close(
+    writer: *mut blocking::Writer,
+    result: *mut FFIResult<Metadata>,
+) {
+    let writer = if writer.is_null() {
+        *result = FFIResult::err("Writer is null");
+        return;
+    } else {
+        &mut *writer
+    };
+
+    let res = match writer.close() {
+        Ok(meta) => FFIResult::ok(meta.into()),
+        Err(e) => FFIResult::err_with_source("Failed to close writer", e),
+    };
+
+    *result = res;
+}
+
+/// Free a blocking writer
+///
+/// # Safety
+///
+/// * `writer` is a valid pointer to a `blocking::Writer`.
+///
+/// # Panics
+///
+/// * If `writer` is not a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn free_writer(writer: *mut blocking::Writer) {
+    if !writer.is_null() {
+        drop(Box::from_raw(writer));
     }
 }
